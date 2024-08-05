@@ -5,3 +5,4 @@ output
 test_trainer/
 merged_model
 stories.csv
+.env
