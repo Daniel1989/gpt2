@@ -6,9 +6,11 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import BertTokenizer, BertConfig, BertForTokenClassification
 from transformers import Trainer, TrainingArguments
 from torch import cuda
+
 device = 'mps'
 data = pd.read_csv("ner_datasetreference.csv", encoding='unicode_escape')
-
+# 本质上是一个分类
+# 统计每个标签的个数，就是看要分到哪些类
 print("Number of tags: {}".format(len(data.Tag.unique())))
 frequencies = data.Tag.value_counts()
 print(frequencies)
@@ -23,25 +25,21 @@ for tag, count in zip(frequencies.index, frequencies):
     continue
 
 print(sorted(tags.items(), key=lambda x: x[1], reverse=True))
-
+#
 entities_to_remove = ["B-art", "I-art", "B-eve", "I-eve", "B-nat", "I-nat"]
 data = data[~data.Tag.isin(entities_to_remove)]
-print(data.head())
-# pandas has a very handy "forward fill" function to fill missing values based on the last upper non-nan value
+# # pandas has a very handy "forward fill" function to fill missing values based on the last upper non-nan value
 data = data.fillna(method='ffill')
-data['sentence'] = data[['Sentence #','Word','Tag']].groupby(['Sentence #'])['Word'].transform(lambda x: ' '.join(x))
-# let's also create a new column called "word_labels" which groups the tags by sentence
-data['word_labels'] = data[['Sentence #','Word','Tag']].groupby(['Sentence #'])['Tag'].transform(lambda x: ','.join(x))
+data['sentence'] = data[['Sentence #', 'Word', 'Tag']].groupby(['Sentence #'])['Word'].transform(lambda x: ' '.join(x))
+# # let's also create a new column called "word_labels" which groups the tags by sentence
+data['word_labels'] = data[['Sentence #', 'Word', 'Tag']].groupby(['Sentence #'])['Tag'].transform(
+    lambda x: ','.join(x))
+
 label2id = {k: v for v, k in enumerate(data.Tag.unique())}
 id2label = {v: k for v, k in enumerate(data.Tag.unique())}
-print(label2id)
 data = data[["sentence", "word_labels"]].drop_duplicates().reset_index(drop=True)
-print(data.head())
-print(data.iloc[41])
-print(len(data.iloc[41].sentence))
-print(len(data.iloc[41].word_labels))
-# 到这里为止，都是构建训练样本，样本包含一个完整到sentence，以及对应到iob
-
+# # 到这里为止，都是构建训练样本，样本包含一个完整到sentence，以及对应到iob
+#
 MAX_LEN = 128
 TRAIN_BATCH_SIZE = 4
 VALID_BATCH_SIZE = 2
@@ -50,6 +48,8 @@ LEARNING_RATE = 1e-05
 MAX_GRAD_NORM = 10
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
+
+#
 def tokenize_and_preserve_labels(sentence, text_labels, tokenizer):
     tokenized_sentence = []
     labels = []
@@ -62,6 +62,7 @@ def tokenize_and_preserve_labels(sentence, text_labels, tokenizer):
         labels.extend([label] * n_subwords)
     return tokenized_sentence, labels
 
+
 class dataset(Dataset):
     def __init__(self, dataframe, tokenizer, max_len):
         self.len = len(dataframe)
@@ -73,15 +74,15 @@ class dataset(Dataset):
         sentence = self.data.sentence[index]
         word_labels = self.data.word_labels[index]
         tokenized_sentence, labels = tokenize_and_preserve_labels(sentence, word_labels, self.tokenizer)
-        tokenized_sentence =["[CLS]"] + tokenized_sentence + ["[SEP]"]
-        labels.insert(0, "0")
-        labels.insert(-1, "0")
+        tokenized_sentence = ["[CLS]"] + tokenized_sentence + ["[SEP]"]
+        labels.insert(0, "O")
+        labels.insert(-1, "O")
         if len(tokenized_sentence) > self.max_len:
             tokenized_sentence = tokenized_sentence[:self.max_len]
             labels = labels[:self.max_len]
         else:
             tokenized_sentence = tokenized_sentence + ['[PAD]' for _ in range(self.max_len - len(tokenized_sentence))]
-            labels = labels + ["0" for _ in range(self.max_len - len(labels))]
+            labels = labels + ["O" for _ in range(self.max_len - len(labels))]
 
         attn_mask = [1 if tok != '[PAD]' else 0 for tok in tokenized_sentence]
         ids = self.tokenizer.convert_tokens_to_ids(tokenized_sentence)
@@ -94,3 +95,115 @@ class dataset(Dataset):
 
     def __len__(self):
         return self.len
+
+
+#
+train_size = 0.8
+train_dataset = data.sample(frac=train_size, random_state=200)
+test_dataset = data.drop(train_dataset.index).reset_index(drop=True)
+train_dataset = train_dataset.reset_index(drop=True)
+
+print("FULL Dataset: {}".format(data.shape))
+print("TRAIN Dataset: {}".format(train_dataset.shape))
+print("TEST Dataset: {}".format(test_dataset.shape))
+
+#
+training_set = dataset(train_dataset, tokenizer, MAX_LEN)
+testing_set = dataset(test_dataset, tokenizer, MAX_LEN)
+#
+# # print the first 30 tokens and corresponding labels
+# # for token, label in zip(tokenizer.convert_ids_to_tokens(training_set[0]["ids"][:30]), training_set[0]["targets"][:30]):
+# #     print('{0:10}  {1}'.format(token, id2label[label.item()]))
+train_params = {'batch_size': TRAIN_BATCH_SIZE,
+                'shuffle': True,
+                'num_workers': 0
+                }
+
+test_params = {'batch_size': VALID_BATCH_SIZE,
+               'shuffle': True,
+               'num_workers': 0
+               }
+
+training_loader = DataLoader(training_set, **train_params)
+testing_loader = DataLoader(testing_set, **test_params)
+
+ids = training_set[0]["ids"].unsqueeze(0)
+mask = training_set[0]["mask"].unsqueeze(0)
+targets = training_set[0]["targets"].unsqueeze(0)
+model = BertForTokenClassification.from_pretrained('bert-base-uncased',
+                                                   num_labels=len(id2label),
+                                                   id2label=id2label,
+                                                   label2id=label2id)
+model.to(device)
+ids = ids.to(device)
+mask = mask.to(device)
+targets = targets.to(device)
+outputs = model(input_ids=ids, attention_mask=mask, labels=targets)
+initial_loss = outputs[0]
+#
+tr_logits = outputs[1]
+optimizer = torch.optim.Adam(params=model.parameters(), lr=LEARNING_RATE)
+
+
+def train(epoch):
+    tr_loss, tr_accuracy = 0, 0
+    nb_tr_examples, nb_tr_steps = 0, 0
+    tr_preds, tr_labels = [], []
+    model.train()
+    for idx, batch in enumerate(training_loader):
+        ids = batch['ids'].to(device, dtype=torch.long)
+        mask = batch['mask'].to(device, dtype=torch.long)
+        targets = batch['targets'].to(device, dtype=torch.long)
+        outputs = model(input_ids=ids, attention_mask=mask, labels=targets)
+        loss, tr_logits = outputs.loss, outputs.logits
+        tr_loss += loss.item()
+
+        nb_tr_steps += 1
+        nb_tr_examples += targets.size(0)
+
+        if idx % 100 == 0:
+            loss_step = tr_loss / nb_tr_steps
+            print(f"Training loss per 100 training steps: {loss_step}")
+
+        # flatten the targets
+        flattened_targets = targets.view(-1)  # shape (batch_size * seq_len,)
+        active_logits = tr_logits.view(-1, model.num_labels)  # shape (batch_size * seq_len, num_labels)
+        # 获取最大值的索引
+        flattened_predictions = torch.argmax(active_logits, axis=1)  # shape (batch_size * seq_len,)
+        # now, use mask to determine where we should compare predictions with targets (includes [CLS] and [SEP] token predictions)
+        active_accuracy = mask.view(-1) == 1  # active accuracy is also of shape (batch_size * seq_len,)
+        targets = torch.masked_select(flattened_targets, active_accuracy)
+        predictions = torch.masked_select(flattened_predictions, active_accuracy)
+
+        tr_preds.extend(predictions)
+        tr_labels.extend(targets)
+
+        # 因为其实是每个token都是一次预测，所以通过这里计算精度
+        tmp_tr_accuracy = accuracy_score(targets.cpu().numpy(), predictions.cpu().numpy())
+        tr_accuracy += tmp_tr_accuracy
+
+        # gradient clipping
+        # 防止梯度爆炸
+        torch.nn.utils.clip_grad_norm_(
+            parameters=model.parameters(), max_norm=MAX_GRAD_NORM
+        )
+
+        # backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    epoch_loss = tr_loss / nb_tr_steps
+    tr_accuracy = tr_accuracy / nb_tr_steps
+    print(f"Training loss epoch: {epoch_loss}")
+    print(f"Training accuracy epoch: {tr_accuracy}")
+
+
+for epoch in range(1):
+    print(f"Training epoch: {epoch + 1}")
+    train(epoch)
+
+# 如何构造Dataloder
+# 1. 依赖Dataset
+# 2. Dataset实现getitem，每个样本返回一个输入和label
+# 3. 训练时是对Dataset进行遍历
