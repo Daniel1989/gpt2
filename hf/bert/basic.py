@@ -5,7 +5,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import BertTokenizer, BertConfig, BertForTokenClassification
 from transformers import Trainer, TrainingArguments
-from torch import cuda
 
 device = 'mps'
 data = pd.read_csv("ner_datasetreference.csv", encoding='unicode_escape')

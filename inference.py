@@ -11,7 +11,7 @@ model = GPT2LMHeadModel.from_pretrained(model_name)
 tokenizer = GPT2Tokenizer.from_pretrained(model_name)
 
 # 将模型设置为评估模式并移动到 GPU（如果可用）
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('mps')
 model.to(device)
 model.eval()
 
