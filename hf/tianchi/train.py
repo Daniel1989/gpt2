@@ -6,7 +6,7 @@ import torch
 
 # 第一次下载时打开
 # model_dir = snapshot_download('Qwen/Qwen2-1.5B-Instruct',cache_dir='./')
-df = pd.read_json('./data/laoshe_merge.json')
+df = pd.read_json('./data/laoshe_merge_final.json')
 df = df._slice(slice(0, 10))
 ds = Dataset.from_pandas(df)
 
@@ -19,7 +19,7 @@ def process_func(example):
     MAX_LENGTH = 2048  # Llama分词器会将一个中文字切分为多个token，因此需要放开一些最大长度，保证数据的完整性
     input_ids, attention_mask, labels = [], [], []
     instruction = tokenizer(
-        f"<|im_start|>system\n你是一个熟读各类小说的专家，请根据提供的故事描述，扩展故事背景，人物形象描述，主要事件描述。<|im_end|>\n<|im_start|>user\n{example['instruction'] + example['input']}<|im_end|>\n<|im_start|>assistant\n",
+        f"<|im_start|>system\n你是一个熟读各类小说的专家，请你根据要求写一段800字左右的小说。<|im_end|>\n<|im_start|>user\n{example['instruction'] + example['input']}<|im_end|>\n<|im_start|>assistant\n",
         add_special_tokens=False)  # add_special_tokens 不在开头加 special_tokens
     response = tokenizer(f"{example['output']}", add_special_tokens=False)
     input_ids = instruction["input_ids"] + response["input_ids"] + [tokenizer.pad_token_id]
@@ -74,5 +74,4 @@ trainer = Trainer(
     data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
 )
 trainer.train()
-lora_path = "./output/Qwen2-1_5B-Instruct_novel_all"
 trainer.save_model(lora_path + "/final")

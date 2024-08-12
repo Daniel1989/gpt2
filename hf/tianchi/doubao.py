@@ -102,13 +102,13 @@ def merge():
     for i, item in enumerate(summary):
         if context[i]["title"] == item["title"]:
             result.append({
-                    "instruction": "你是一个熟读各类小说的专家，请根据提供的故事描述，扩展故事背景，人物形象描述，主要事件描述。",
+                    "instruction": "你是一个熟读各类小说的专家，请你根据要求写一段800字左右的小说。",
                     "input": item["summary"],
-                    "output": "背景:\n"+context[i]["background"]+"\n人物形象:\n"+context[i]["actor"]+"\n主要事件:\n"+context[i]["events"]
+                    "output": item["content"]
             })
         else:
             print("不一致")
-    with open(f"./data/laoshe_merge.json", "w", encoding='utf-8') as f:
+    with open(f"./data/laoshe_merge_final.json", "w", encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False)
 
 
