@@ -1,3 +1,5 @@
+import time
+
 import pandas as pd
 import numpy as np
 from sklearn.metrics import accuracy_score
@@ -5,6 +7,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import BertTokenizer, BertConfig, BertForTokenClassification
 from transformers import Trainer, TrainingArguments
+import torch.profiler
+import csv
 
 device = 'mps'
 data = pd.read_csv("ner_datasetreference.csv", encoding='unicode_escape')
@@ -149,20 +153,32 @@ def train(epoch):
     nb_tr_examples, nb_tr_steps = 0, 0
     tr_preds, tr_labels = [], []
     model.train()
+    idx_list = []
+    step_cost = []
+    total_cost = []
+    metric_csv = [
+        ["num", "step", "total"]
+    ]
     for idx, batch in enumerate(training_loader):
+        metric = [idx + 1]
+        step_start_time = time.time()  # Start timer for the step
         ids = batch['ids'].to(device, dtype=torch.long)
         mask = batch['mask'].to(device, dtype=torch.long)
         targets = batch['targets'].to(device, dtype=torch.long)
+        # print(f'1 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
         outputs = model(input_ids=ids, attention_mask=mask, labels=targets)
         loss, tr_logits = outputs.loss, outputs.logits
-        tr_loss += loss.item()
+        # print(f'2 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
+        # tr_loss += loss.item() # 用于提取训练损失，主要是为了查看进度，可以不要
+        # print(f'2.5 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
 
         nb_tr_steps += 1
         nb_tr_examples += targets.size(0)
 
-        if idx % 100 == 0:
-            loss_step = tr_loss / nb_tr_steps
-            print(f"Training loss per 100 training steps: {loss_step}")
+        # if idx % 100 == 0:
+        #     loss_step = tr_loss / nb_tr_steps
+        #     print(f"Training loss per 100 training steps: {loss_step}")
+        # print(f'3 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
 
         # flatten the targets
         flattened_targets = targets.view(-1)  # shape (batch_size * seq_len,)
@@ -171,6 +187,8 @@ def train(epoch):
         flattened_predictions = torch.argmax(active_logits, axis=1)  # shape (batch_size * seq_len,)
         # now, use mask to determine where we should compare predictions with targets (includes [CLS] and [SEP] token predictions)
         active_accuracy = mask.view(-1) == 1  # active accuracy is also of shape (batch_size * seq_len,)
+        # print(f'4 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
+
         targets = torch.masked_select(flattened_targets, active_accuracy)
         predictions = torch.masked_select(flattened_predictions, active_accuracy)
 
@@ -178,23 +196,42 @@ def train(epoch):
         tr_labels.extend(targets)
 
         # 因为其实是每个token都是一次预测，所以通过这里计算精度
+        # print(f'5 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
+
         tmp_tr_accuracy = accuracy_score(targets.cpu().numpy(), predictions.cpu().numpy())
         tr_accuracy += tmp_tr_accuracy
-
+        # print(f'6 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
         # gradient clipping
         # 防止梯度爆炸
         torch.nn.utils.clip_grad_norm_(
             parameters=model.parameters(), max_norm=MAX_GRAD_NORM
         )
+        # print(f'7 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
 
         # backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        optimizer.zero_grad() # 将上次迭代的清零，时间忽略不计
+        # print(f'7.1 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start_time:.4f} seconds')
+        loss.backward() # 最花时间，受模型复杂度和batch size影响
+        # print(f'7.2 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start:.4f} seconds')
 
-    epoch_loss = tr_loss / nb_tr_steps
+        step_start = time.time()
+        optimizer.step() # 比较花时间，受模型复杂度和优化算法影响
+        print(f'7.3 Epoch {epoch + 1}, Step {idx + 1} took {time.time() - step_start:.4f} seconds')
+        metric.append(time.time() - step_start)
+        step_end_time = time.time()  # End timer for the step
+        print(f'Epoch {epoch + 1}, Step {idx + 1} took {step_end_time - step_start_time:.4f} seconds')
+        metric.append(step_end_time - step_start_time)
+        metric_csv.append([item for item in metric])
+
+    print("total step:", len(training_loader))
+    print("params", TRAIN_BATCH_SIZE, LEARNING_RATE, MAX_GRAD_NORM)
+    with open("basic.csv", mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows(metric_csv)
+        print("创建csv文件成功")
+
     tr_accuracy = tr_accuracy / nb_tr_steps
-    print(f"Training loss epoch: {epoch_loss}")
+    # print(f"Training loss epoch: {epoch_loss}")
     print(f"Training accuracy epoch: {tr_accuracy}")
 
 
@@ -202,7 +239,74 @@ for epoch in range(1):
     print(f"Training epoch: {epoch + 1}")
     train(epoch)
 
+# 训练加速
+# 目前时间主要花在loss.item, loss.backward, optimizer.step上, 尤其是loss.backward
+# https://www.reddit.com/r/MachineLearning/comments/kvs1ex/d_here_are_17_ways_of_making_pytorch_training/
+
 # 如何构造Dataloder
 # 1. 依赖Dataset
 # 2. Dataset实现getitem，每个样本返回一个输入和label
 # 3. 训练时是对Dataset进行遍历
+# def valid(model, testing_loader):
+#     # put model in evaluation mode
+#     model.eval()
+#
+#     eval_loss, eval_accuracy = 0, 0
+#     nb_eval_examples, nb_eval_steps = 0, 0
+#     eval_preds, eval_labels = [], []
+#
+#     with torch.no_grad():
+#         for idx, batch in enumerate(testing_loader):
+#
+#             ids = batch['ids'].to(device, dtype=torch.long)
+#             mask = batch['mask'].to(device, dtype=torch.long)
+#             targets = batch['targets'].to(device, dtype=torch.long)
+#
+#             outputs = model(input_ids=ids, attention_mask=mask, labels=targets)
+#             loss, eval_logits = outputs.loss, outputs.logits
+#
+#             eval_loss += loss.item()
+#
+#             nb_eval_steps += 1
+#             nb_eval_examples += targets.size(0)
+#
+#             if idx % 100 == 0:
+#                 loss_step = eval_loss / nb_eval_steps
+#                 print(f"Validation loss per 100 evaluation steps: {loss_step}")
+#
+#             # compute evaluation accuracy
+#             flattened_targets = targets.view(-1)  # shape (batch_size * seq_len,)
+#             active_logits = eval_logits.view(-1, model.num_labels)  # shape (batch_size * seq_len, num_labels)
+#             flattened_predictions = torch.argmax(active_logits, axis=1)  # shape (batch_size * seq_len,)
+#             # now, use mask to determine where we should compare predictions with targets (includes [CLS] and [SEP] token predictions)
+#             active_accuracy = mask.view(-1) == 1  # active accuracy is also of shape (batch_size * seq_len,)
+#             targets = torch.masked_select(flattened_targets, active_accuracy)
+#             predictions = torch.masked_select(flattened_predictions, active_accuracy)
+#
+#             eval_labels.extend(targets)
+#             eval_preds.extend(predictions)
+#
+#             tmp_eval_accuracy = accuracy_score(targets.cpu().numpy(), predictions.cpu().numpy())
+#             eval_accuracy += tmp_eval_accuracy
+#
+#     # print(eval_labels)
+#     # print(eval_preds)
+#
+#     labels = [id2label[id.item()] for id in eval_labels]
+#     predictions = [id2label[id.item()] for id in eval_preds]
+#
+#     # print(labels)
+#     # print(predictions)
+#
+#     eval_loss = eval_loss / nb_eval_steps
+#     eval_accuracy = eval_accuracy / nb_eval_steps
+#     print(f"Validation Loss: {eval_loss}")
+#     print(f"Validation Accuracy: {eval_accuracy}")
+#
+#     return labels, predictions
+#
+# labels, predictions = valid(model, testing_loader)
+# from seqeval.metrics import classification_report
+#
+# print(classification_report([labels], [predictions]))
+
