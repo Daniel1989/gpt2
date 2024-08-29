@@ -12,7 +12,7 @@ Checkpoints(参数): 这些是将在给架构中结构中加载的权重。
 其他模型，基于上述模型，进行finetune（监督训练得来的模型）。注意，不同的架构，会需要不同的tokenizer，即不同的输入
 
 ### GPT-like(decode-only)
-称作自回归Transformer模型，只需要关注前面的单词。
+称作自回归Transformer模型，或者causal 模型，即因果模型，只需要关注前面的单词。
 1. 适合任务--适用于生成任务，如文本生成。
 2. 训练方式--通常围绕预测句子中的下一个单词进行。
 3. 类型--CTRL, GPT, GPT-2, Transformer XL

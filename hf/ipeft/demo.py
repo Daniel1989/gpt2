@@ -91,17 +91,16 @@ peft_config = LoraConfig(task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, 
 #     print(task)
 
 
-tokenizer = AutoTokenizer.from_pretrained("bigscience/mt0-small")
-# 加载模型
-model = AutoModelForSeq2SeqLM.from_pretrained("bigscience/mt0-small", device_map="auto")
-# 加载lora权重
-model = PeftModel.from_pretrained(model, model_id="./output_dir")
-model.to('mps')
-model_inputs = tokenizer(["how are you"], return_tensors="pt").to("mps")
-generated_ids = model.generate(
-    **model_inputs,
-    max_new_tokens=200
-)
-response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-print(response)
-
+# tokenizer = AutoTokenizer.from_pretrained("bigscience/mt0-small")
+# # 加载模型
+# model = AutoModelForSeq2SeqLM.from_pretrained("bigscience/mt0-small", device_map="auto")
+# # 加载lora权重
+# model = PeftModel.from_pretrained(model, model_id="./output_dir")
+# model.to('mps')
+# model_inputs = tokenizer(["how are you"], return_tensors="pt")
+# generated_ids = model.generate(
+#     **model_inputs,
+#     max_new_tokens=200
+# )
+# response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+# print(response)

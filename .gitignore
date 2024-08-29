@@ -7,3 +7,4 @@ merged_model
 stories.csv
 .env
 output_dir/
+output_lora/
